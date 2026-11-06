@@ -71,7 +71,14 @@ const EN_EXTRA = {
     'Іконка': 'Icon',
     'Файл': 'File',
     'Встановити на пристрій': 'Install on device',
-    'Сайт працює без мосту для всього, крім мережевих ігор.': 'The site works without the bridge for everything except network games.'
+    'Кімната': 'Room',
+    'Адреса кімнати': 'Room address',
+    'Введіть адресу кімнати, як у застосунку.': 'Enter the room address as shown in the app.',
+    'Відкрити сторінку кімнати': 'Open the room page',
+    'Не вдалося підключитись до гри.': 'Could not connect to the game.',
+    'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста.': 'Enter the address from the “Address for the website” line in the host app.',
+    'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Відкриється сторінка кімнати з телефона хоста — далі приєднання в один дотик. Потрібна та сама Wi-Fi мережа або точка доступу хоста.':
+        'Enter the address from the “Address for the website” line in the host app. The room page will open from the host phone, and joining takes one tap. You must be on the same Wi-Fi or the host’s hotspot.'
 };
 
 function tEn(raw) {
