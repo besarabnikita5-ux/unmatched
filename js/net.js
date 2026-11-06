@@ -1,14 +1,13 @@
 'use strict';
-// ───────────── Мережа: клієнт кімнати Android-застосунку (через міст WebSocket ⇄ TCP) ─────────────
-// Протокол той самий, що в NetGame.kt: рядки JSON; challenge → join → welcome; далі state/roll/result/closed,
+// ───────────── Мережа: клієнт кімнати Android-застосунку (напряму по WebSocket, без мосту) ─────────────
+// Хост-застосунок слухає WebSocket на ws://IP:45679/ws. Протокол той самий, що в NetGame.kt:
+// рядки JSON; challenge → join → welcome; далі state/roll/result/closed,
 // heartbeat кожні 3 с (хост вважає гравця відключеним, якщо від нього немає повідомлень 10 с),
 // повернення на місце після обриву — rejoin з HMAC-доказом (токен видано при вході).
 
 const Net = (() => {
     const TICK_MS = 3000, TIMEOUT_MS = 10000, RECONNECT_MS = 120000, ROLL_MS = 3800, SESSION_TIMEOUT = 12000;
 
-    // ── міст ──
-    const bridge = { url: '', status: 'off', error: '', games: [], mdns: false };
     let ws = null, session = null;
 
     // ── кімната ──
@@ -22,89 +21,55 @@ const Net = (() => {
     const subs = new Set();
     const emit = () => subs.forEach((f) => { try { f(); } catch (e) { console.error(e); } });
 
-    // ───────────── WebSocket до мосту ─────────────
+    // ───────────── WebSocket до хоста ─────────────
 
-    function connectBridge(url) {
-        return new Promise((resolve, reject) => {
-            closeBridge(true);
-            bridge.url = url; bridge.status = 'connecting'; bridge.error = ''; emit();
-            let settled = false;
-            try { ws = new WebSocket(url); } catch (e) { bridge.status = 'off'; bridge.error = 'bad url'; emit(); return reject(e); }
-            const sock = ws;
-            const timer = setTimeout(() => { if (!settled) { settled = true; try { sock.close(); } catch (_) { } fail(new Error('timeout')); } }, 6000);
-            const fail = (e) => { clearTimeout(timer); bridge.status = 'off'; bridge.error = String((e && e.message) || e); emit(); reject(e); };
-            sock.onopen = () => { /* чекаємо hello */ };
-            sock.onmessage = (ev) => {
-                if (sock !== ws) return;
-                if (!settled) { /* перше повідомлення — hello */ settled = true; clearTimeout(timer); bridge.status = 'ready'; emit(); resolve(); }
-                onWsText(String(ev.data));
-            };
-            sock.onerror = () => { if (!settled) { settled = true; fail(new Error('connect')); } };
-            sock.onclose = () => {
-                if (sock !== ws) return;
-                ws = null;
-                const was = bridge.status;
-                bridge.status = 'off'; bridge.games = [];
-                if (!settled) { settled = true; fail(new Error('closed')); return; }
-                if (session) { const s = session; session = null; s.reject(new Error('bridge closed')); }
-                if (room.active && !room.reconnecting && was === 'ready') onDisconnected(room.sessionId);
-                emit();
-            };
-        });
-    }
-
-    function closeBridge(silent) {
-        if (ws) { const s = ws; ws = null; try { s.onclose = null; s.close(); } catch (_) { } }
-        bridge.status = 'off'; bridge.games = [];
-        if (!silent) emit();
+    function closeSocket() {
+        if (ws) { const s = ws; ws = null; try { s.onclose = null; s.onmessage = null; s.close(); } catch (_) { } }
     }
 
     const wsSend = (o) => { if (ws && ws.readyState === 1) ws.send(typeof o === 'string' ? o : JSON.stringify(o)); };
 
-    function scan() { wsSend({ bridge: 'scan' }); }
-
-    // ───────────── Розбір повідомлень ─────────────
-
     function onWsText(text) {
         let o; try { o = JSON.parse(text); } catch (_) { return; }
-        if (o && typeof o.bridge === 'string') return onBridgeMsg(o);
         if (session && (session.stage === 'challenge' || session.stage === 'resp')) return onSessionMsg(o);
         if (session) return;                // чужі рядки під час підключення ігноруємо
         room.lastRx = Date.now();
         onRoomMsg(o);
     }
 
-    function onBridgeMsg(o) {
-        if (o.bridge === 'hello') { bridge.mdns = !!o.mdns; emit(); }
-        else if (o.bridge === 'games') { bridge.games = o.list || []; emit(); }
-        else if (o.bridge === 'connected') { if (session && session.stage === 'connect') session.stage = 'challenge'; }
-        else if (o.bridge === 'error') { if (session) { const s = session; session = null; s.reject(new Error(o.message || 'error')); } else { room.notice = o.message || ''; emit(); } }
-        else if (o.bridge === 'closed') {
-            if (session) { const s = session; session = null; s.reject(new Error('closed')); }
-            else if (room.active && !room.reconnecting) onDisconnected(room.sessionId);
-        }
-    }
-
-    /** Відкриває TCP-сесію до хоста й проходить handshake. Повертає відповідь хоста (welcome | denied). */
+    /** Відкриває WebSocket до хоста й проходить handshake. Повертає відповідь хоста (welcome | denied). */
     function openSession(game, makeAuth) {
         return new Promise((resolve, reject) => {
-            if (!ws || ws.readyState !== 1) return reject(new Error('Міст не підключено.'));
-            const timer = setTimeout(() => { if (session && session.timer === timer) { session = null; wsSend({ bridge: 'close' }); reject(new Error('timeout')); } }, SESSION_TIMEOUT);
+            closeSocket();
+            let sock;
+            try { sock = new WebSocket(`ws://${game.host}:${game.port}/ws`); } catch (e) { return reject(new Error('Не вдалося підключитись до гри.')); }
+            ws = sock;
+            const timer = setTimeout(() => {
+                if (session && session.sock === sock) { session = null; closeSocket(); reject(new Error('Не вдалося підключитись до гри.')); }
+            }, SESSION_TIMEOUT);
             session = {
-                stage: 'connect', timer, makeAuth,
+                sock, stage: 'challenge', makeAuth,
                 resolve: (v) => { clearTimeout(timer); resolve(v); },
                 reject: (e) => { clearTimeout(timer); reject(e); }
             };
-            wsSend({ bridge: 'connect', host: game.host, port: game.port });
+            sock.onmessage = (ev) => { if (sock === ws) onWsText(String(ev.data)); };
+            sock.onerror = () => { };
+            sock.onclose = () => {
+                if (sock !== ws) return;
+                ws = null;
+                if (session && session.sock === sock) { const s = session; session = null; s.reject(new Error('Не вдалося підключитись до гри.')); return; }
+                if (room.active && !room.reconnecting) onDisconnected(room.sessionId);
+                emit();
+            };
         });
     }
 
     async function onSessionMsg(o) {
         const s = session; if (!s) return;
         if (s.stage === 'challenge') {
-            if (o.t !== 'challenge') { session = null; s.reject(new Error('protocol')); return; }
+            if (o.t !== 'challenge') { session = null; closeSocket(); s.reject(new Error('protocol')); return; }
             s.stage = 'auth';
-            try { wsSend(await s.makeAuth(String(o.nonce))); } catch (e) { session = null; s.reject(e); return; }
+            try { wsSend(await s.makeAuth(String(o.nonce))); } catch (e) { session = null; closeSocket(); s.reject(e); return; }
             if (session === s) s.stage = 'resp';
         } else if (s.stage === 'resp') {
             session = null; s.resolve(o);
@@ -113,11 +78,11 @@ const Net = (() => {
 
     // ───────────── Вхід у кімнату ─────────────
 
-    /** me: {nick, reg, avatar(base64), fc, fm, g, w} */
+    /** game: {host, port, mode, tournament, name}; me: {nick, reg, avatar(base64), fc, fm, g, w} */
     async function join(game, me) {
-        leave(true);
+        leaveWith('', false, true);
         const resp = await openSession(game, async () => ({ t: 'join', nick: me.nick, reg: !!me.reg, avatar: me.avatar || '', fc: me.fc || '', fm: me.fm || '', g: me.g || 0, w: me.w || 0 }));
-        if (resp.t !== 'welcome') { wsSend({ bridge: 'close' }); throw new Error(resp.reason || 'Відмовлено у вході.'); }
+        if (resp.t !== 'welcome') { closeSocket(); throw new Error(resp.reason || 'Відмовлено у вході.'); }
         const sid = ++sidCounter;
         room = fresh();
         Object.assign(room, {
@@ -133,7 +98,7 @@ const Net = (() => {
             if (!room.active) return;
             if (!room.reconnecting) {
                 wsSend({ t: 'hb' });
-                if (Date.now() - room.lastRx > TIMEOUT_MS) { wsSend({ bridge: 'close' }); onDisconnected(room.sessionId); }
+                if (Date.now() - room.lastRx > TIMEOUT_MS) { const sid = room.sessionId; closeSocket(); onDisconnected(sid); }
             }
             emit();   // оновлення таймерів
         }, TICK_MS);
@@ -143,7 +108,7 @@ const Net = (() => {
 
     function onDisconnected(sid) {
         if (sid !== room.sessionId || !room.active || room.reconnecting) return;
-        if (!room.lastGame) { leaveWith("З'єднання втрачено."); return; }
+        if (!room.lastGame) { leaveWith("З'єднання втрачено.", true); return; }
         room.reconnecting = true; room.notice = "З'єднання втрачено. Перепідключення…"; emit();
         const token = room.lastToken, id = room.myId, g = room.lastGame;
         (async () => {
@@ -151,19 +116,18 @@ const Net = (() => {
             while (Date.now() < deadline) {
                 if (sid !== room.sessionId || !room.active) return;
                 try {
-                    if (!ws || ws.readyState !== 1) await connectBridge(bridge.url);
                     const resp = await openSession(g, async (nonce) => ({ t: 'rejoin', id, proof: await hmacHex(token, `rejoin|${nonce}|${id}`) }));
                     if (resp.t === 'welcome') {
-                        if (sid !== room.sessionId) { wsSend({ bridge: 'close' }); return; }
+                        if (sid !== room.sessionId) { closeSocket(); return; }
                         room.reconnecting = false; room.notice = ''; room.lastRx = Date.now(); emit(); return;
                     }
-                    wsSend({ bridge: 'close' });
-                    if (sid === room.sessionId) leaveWith(resp.reason || "З'єднання втрачено.");
+                    closeSocket();
+                    if (sid === room.sessionId) leaveWith(resp.reason || "З'єднання втрачено.", true);
                     return;
                 } catch (_) { /* повторимо */ }
                 await sleep(3000);
             }
-            if (sid === room.sessionId) leaveWith("З'єднання втрачено.");
+            if (sid === room.sessionId) leaveWith("З'єднання втрачено.", true);
         })();
     }
 
@@ -246,20 +210,23 @@ const Net = (() => {
     const tourConfirm = () => wsSend({ t: 'tok' });
     const tourPick = (ch) => wsSend({ t: 'tpick', char: ch });
 
-    function leaveWith(msg, fromHost) {
+    /** Вихід із кімнати. fromHost — хост сам закрив зʼєднання (повідомляти його про вихід не треба). */
+    function leaveWith(msg, fromHost, silent) {
         if (!room.active) return;
-        if (!fromHost) wsSend({ t: 'leave' });
-        wsSend({ bridge: 'close' });
+        if (!fromHost) {
+            wsSend({ t: 'leave' });
+            const s = ws; ws = null;
+            if (s) setTimeout(() => { try { s.onclose = null; s.close(); } catch (_) { } }, 200);
+        } else closeSocket();
         clearInterval(tickTimer); clearTimeout(rollTimer);
         const counter = room.resultCounter;
         room = fresh(); room.resultCounter = counter; room.notice = msg || '';
-        emit();
+        if (!silent) emit();
     }
-    function leave(silent) { if (room.active) leaveWith(silent ? '' : ''); }
 
     return {
-        get bridge() { return bridge; }, get room() { return room; }, subscribe(f) { subs.add(f); return () => subs.delete(f); },
-        connectBridge, closeBridge, scan, join, leave: (m) => leaveWith(m || ''), answerResult, tourSelect, tourConfirm, tourPick,
+        get room() { return room; }, subscribe(f) { subs.add(f); return () => subs.delete(f); },
+        join, leave: (m) => leaveWith(m || '', false), answerResult, tourSelect, tourConfirm, tourPick,
         mySeat, hostSeat, sideOf, sideName, isOpponentOfHost, pendingForMe, ROLL_MS,
         clearNotice() { room.notice = ''; emit(); }
     };
