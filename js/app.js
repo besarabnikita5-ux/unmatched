@@ -18,7 +18,7 @@ const App = {
     updateNetChip() {
         const c = $('#net-chip'); if (!c) return;
         const on = Net.room.active;
-        c.className = 'chip net ' + (on ? 'ok' : Net.bridge.status === 'ready' ? 'wait' : '');
+        c.className = 'chip net ' + (on ? 'ok' : '');
         c.textContent = on ? '🌐 ' + t('Кімната') : '🌐 ' + t('Мережа');
     }
 };
@@ -344,6 +344,8 @@ function init() {
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => { });
     if (!P.has('fighters') && !P.has('maps')) { /* порожній старт: користувач додає все з каталогу або вручну */ }
     render();
+    // Сторінку віддав застосунок-хост (http://IP:45679): одразу пропонуємо приєднатись до його кімнати
+    detectHostedRoom().then((g) => { if (g && !Net.room.active) openJoinDialog(); });
     if (P.quota) toast('Сховище браузера заповнене: частину даних не збережено.');
 }
 document.addEventListener('DOMContentLoaded', init);
