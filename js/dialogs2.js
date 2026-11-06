@@ -47,55 +47,73 @@ function openTournamentDialog(src) {
 }
 
 // ───────────── Підключення до мережевої гри ─────────────
+// Без мосту: браузер напряму відкриває WebSocket до застосунку-хоста (ws://IP:45679/ws).
+// Браузер дозволяє це лише зі сторінки http://… . Сайт на GitHub Pages — це https, тому з нього людина
+// відкриває сторінку кімнати, яку віддає сам застосунок (http://IP:45679): там усе вже налаштовано.
 
-function defaultBridgeUrl() {
-    const saved = P.get('bridgeUrl'); if (saved) return saved;
-    if (location.protocol === 'http:' && location.hostname && !/github\.io$/.test(location.hostname)) return `ws://${location.host}`;
-    return 'ws://localhost:8765';
+const DEFAULT_WEB_PORT = 45679;
+let hostedGame = null;
+
+/** Якщо сторінку віддав застосунок-хост, повертає його кімнату (інакше null). */
+async function detectHostedRoom() {
+    if (location.protocol !== 'http:' || !location.port) return null;
+    try {
+        const r = await fetch('room.json', { cache: 'no-store' });
+        if (!r.ok) return null;
+        const j = await r.json();
+        if (!j || j.app !== 'unmatched') return null;
+        hostedGame = { host: location.hostname, port: parseInt(location.port, 10), mode: j.mode || '1 на 1', hostNick: j.host || '', tournament: !!j.tour, name: j.name || location.host };
+        return hostedGame;
+    } catch (_) { return null; }
+}
+
+/** "192.168.43.1:45679", "http://192.168.43.1:45679/" → {host, port}; порт за замовчуванням — 45679. */
+function parseRoomAddress(text) {
+    const s = String(text || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+    const m = /^([^:\s]+)(?::(\d{1,5}))?$/.exec(s);
+    if (!m) return null;
+    const port = m[2] ? parseInt(m[2], 10) : DEFAULT_WEB_PORT;
+    return port >= 1 && port <= 65535 ? { host: m[1], port } : null;
 }
 
 function openJoinDialog() {
-    const urlI = h('input', { class: 'input', value: defaultBridgeUrl(), placeholder: 'ws://localhost:8765' });
-    const hostI = h('input', { class: 'input', placeholder: '192.168.0.12', inputMode: 'decimal' });
-    const portI = h('input', { class: 'input', value: '45678', inputMode: 'numeric', style: { maxWidth: '110px' } });
-    const status = h('div', { class: 'bridge-status' }), gamesBox = h('div', { class: 'list' }), err = h('div', { class: 'err' });
+    const secure = location.protocol === 'https:';
+    const addrI = h('input', { class: 'input', placeholder: '192.168.43.1:45679', inputMode: 'url', autocapitalize: 'off', autocomplete: 'off' });
+    const err = h('div', { class: 'err' });
     let busy = false;
-    const paint = () => {
-        const b = Net.bridge;
-        status.replaceChildren(h('span', { class: 'dot ' + (b.status === 'ready' ? 'ok' : b.status === 'connecting' ? 'wait' : 'bad') }),
-            t(b.status === 'ready' ? 'Міст підключено' : b.status === 'connecting' ? 'Підключаємось до мосту…' : 'Міст не підключено'));
-        gamesBox.replaceChildren();
-        if (b.status !== 'ready') return;
-        if (!b.games.length) gamesBox.append(h('p', { class: 'muted small' }, t('Ігор не знайдено. Перевірте, що телефон і комп’ютер в одній Wi-Fi мережі, або введіть адресу вручну.')));
-        b.games.forEach((g) => gamesBox.append(h('button', { class: 'row pick', onclick: () => doJoin(g) },
-            h('div', { class: 'grow' }, h('b', null, g.hostNick || g.name), h('div', { class: 'muted small' }, `${g.mode}${g.tournament ? ' • ' + t('Турнірна гра') : ''} • ${g.host}:${g.port}`)), chip('Приєднатися'))));
-    };
-    const unsub = Net.subscribe(paint);
-    async function connect() {
-        err.textContent = ''; P.set('bridgeUrl', urlI.value.trim());
-        try { await Net.connectBridge(urlI.value.trim()); } catch (_) { err.textContent = t('Не вдалося підключитись до мосту. Запустіть його на комп’ютері (див. інструкцію).'); }
-        paint();
-    }
+
     async function doJoin(g) {
         if (busy) return; busy = true; err.textContent = t('Приєднуємось…');
         try {
-            if (Net.bridge.status !== 'ready') await connect();
-            if (Net.bridge.status !== 'ready') { busy = false; return; }
             const me = App.selfProfile();
             if (me._avatarUrl) me.avatar = b64FromDataUrl(await resizeDataUrl(me._avatarUrl, 96, 96, 'image/jpeg', 0.8));
             await Net.join(g, me); err.textContent = ''; d.close();
         } catch (e) { err.textContent = t(String(e.message || e)); } finally { busy = false; }
     }
-    const d = openDialog({
-        title: 'Приєднатися до гри', wide: true, onClose: unsub,
-        body: [h('h3', null, t('Підключення до мосту')), h('div', { class: 'row' }, urlI, btn('Підключити', connect)), status,
-        h('p', { class: 'muted small' }, t('Сайт працює без мосту для всього, крім мережевих ігор.')),
-        h('h3', null, t('Ігри в мережі')), gamesBox, h('div', { class: 'row end' }, btn('Оновити', () => { Net.scan(); }, 'ghost small')),
-        h('h3', null, t('Вхід за адресою')), h('div', { class: 'row' }, h('label', { class: 'field grow' }, h('span', null, t('IP хоста')), hostI), h('label', { class: 'field' }, h('span', null, t('Порт')), portI)),
-        h('div', { class: 'row end' }, btn('Приєднатися', () => { const host = hostI.value.trim(); if (!host) { err.textContent = t('Введіть IP хоста.'); return; } doJoin({ host, port: parseInt(portI.value, 10) || 45678, mode: '1 на 1', tournament: false, name: host }); })), err]
-    });
-    paint();
-    if (Net.bridge.status !== 'ready') connect(); else Net.scan();
+
+    function go() {
+        const a = parseRoomAddress(addrI.value);
+        if (!a) { err.textContent = t('Введіть адресу кімнати, як у застосунку.'); return; }
+        if (secure) { location.href = `http://${a.host}:${a.port}/`; return; }   // сторінку кімнати віддає застосунок
+        doJoin({ host: a.host, port: a.port, mode: '1 на 1', tournament: false, name: a.host });
+    }
+    addrI.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+
+    const kids = [];
+    if (hostedGame) {
+        const g = hostedGame;
+        kids.push(h('h3', null, t('Кімната')),
+            h('button', { class: 'row pick', onclick: () => doJoin(g) },
+                h('div', { class: 'grow' }, h('b', null, g.hostNick || g.name), h('div', { class: 'muted small' }, `${g.mode}${g.tournament ? ' • ' + t('Турнірна гра') : ''}`)), chip('Приєднатися')));
+    }
+    kids.push(h('h3', null, t('Вхід за адресою')),
+        h('p', { class: 'muted small' }, t(secure
+            ? 'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Відкриється сторінка кімнати з телефона хоста — далі приєднання в один дотик. Потрібна та сама Wi-Fi мережа або точка доступу хоста.'
+            : 'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста.')),
+        h('div', { class: 'row' }, h('label', { class: 'field grow' }, h('span', null, t('Адреса кімнати')), addrI)),
+        h('div', { class: 'row end' }, btn(secure ? 'Відкрити сторінку кімнати' : 'Приєднатися', go)), err);
+
+    const d = openDialog({ title: 'Приєднатися до гри', wide: true, body: kids });
 }
 
 // ───────────── Кімната (клієнт) ─────────────
