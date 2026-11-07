@@ -234,6 +234,7 @@ function openFighterEdit(name) {
     const boxI = h('input', { class: 'input', value: boxes[name] || '', maxlength: FIGHTER_MAX_BOX, list: 'box-list' });
     const id = Labels.charId(name);
     const labelI = id ? h('input', { class: 'input', value: Labels.chars[id] || '', maxlength: 30, placeholder: t('Власний підпис') }) : null;
+    if (Official.isChar(name)) { nameI.disabled = true; boxI.disabled = true; }   // офіційні записи не змінюються
     let newIcon = null, removeIcon = false;
     const prev = h('div', { class: 'row' });
     const paint = () => prev.replaceChildren(newIcon ? h('img', { class: 'icon', src: newIcon, style: { width: '64px', height: '64px' } }) : (removeIcon ? letterIcon(name, 64) : fighterIcon(name, 64)),
@@ -283,22 +284,19 @@ function addOfficialMap(m, boxName) {
 function openCatalogDialog() {
     const search = h('input', { class: 'input', type: 'search', placeholder: t('Пошук персонажа чи поля') });
     const out = h('div', { class: 'list' });
-    const owned = () => ({ c: new Set(Lists.fighters().map((x) => x.toLowerCase())), m: new Set(Lists.maps().map((x) => x.name.toLowerCase())) });
     const draw = () => {
-        const q = norm(search.value), o = owned(); out.replaceChildren();
+        const q = norm(search.value); out.replaceChildren();
         CATALOG.forEach((b) => {
             const cs = b.characters.filter((c) => !q || [c.name, ...c.aliases].some((x) => norm(x).includes(q)));
             const ms = b.maps.filter((m) => !q || [m.name, ...m.aliases].some((x) => norm(x).includes(q)));
             if (!cs.length && !ms.length && !(q && norm(b.name).includes(q))) return;
-            const det = h('details', { class: 'box', open: !!q },
+            out.append(h('details', { class: 'box', open: !!q },
                 h('summary', null, b.name, h('span', { class: 'muted small' }, ` ${b.characters.length} / ${b.maps.length}`)),
-                h('div', { class: 'row end' }, btn('Додати всю коробку', () => { b.characters.forEach((c) => addOfficialChar(c, b.name)); b.maps.forEach((m) => addOfficialMap(m, b.name)); App.refresh(); draw(); }, 'ghost')),
-                cs.map((c) => h('div', { class: 'row' }, fighterIcon(c.name, 32), h('div', { class: 'grow' }, Labels.char(c.name)), o.c.has(c.name.toLowerCase()) ? chip('✓') : btn('Додати', () => { addOfficialChar(c, b.name); App.refresh(); draw(); }, 'small'))),
-                ms.map((m) => h('div', { class: 'row' }, h('div', { class: 'grow' }, '🗺 ', Labels.map(m.name), m.team ? h('span', { class: 'muted small' }, ' • 2 на 2') : null), o.m.has(m.name.toLowerCase()) ? chip('✓') : btn('Додати', () => { addOfficialMap(m, b.name); App.refresh(); draw(); }, 'small'))));
-            out.append(det);
+                cs.map((c) => h('div', { class: 'row' }, fighterIcon(c.name, 32), h('div', { class: 'grow' }, Labels.char(c.name)), chip('✓'))),
+                ms.map((m) => h('div', { class: 'row' }, h('div', { class: 'grow' }, '🗺 ', Labels.map(m.name), m.team ? h('span', { class: 'muted small' }, ' • 2 на 2') : null), chip('✓')))));
         });
         if (!out.children.length) out.append(h('p', { class: 'muted' }, t('Нічого не знайдено.')));
     };
     search.addEventListener('input', draw); draw();
-    openDialog({ title: 'Каталог офіційних коробок', wide: true, body: [search, out] });
+    openDialog({ title: 'Каталог офіційних коробок', wide: true, body: [h('p', { class: 'muted small' }, t('Усі офіційні коробки додано автоматично, їх не можна видалити чи змінити.')), search, out] });
 }
