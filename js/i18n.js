@@ -77,8 +77,15 @@ const EN_EXTRA = {
     'Відкрити сторінку кімнати': 'Open the room page',
     'Не вдалося підключитись до гри.': 'Could not connect to the game.',
     'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста.': 'Enter the address from the “Address for the website” line in the host app.',
-    'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Відкриється сторінка кімнати з телефона хоста — далі приєднання в один дотик. Потрібна та сама Wi-Fi мережа або точка доступу хоста.':
-        'Enter the address from the “Address for the website” line in the host app. The room page will open from the host phone, and joining takes one tap. You must be on the same Wi-Fi or the host’s hotspot.'
+    'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Сторінка кімнати відкриється з телефона хоста, а ваш акаунт перенесеться автоматично. Потрібна та сама Wi-Fi мережа або точка доступу хоста.':
+        'Enter the address from the “Address for the website” line in the host app. The room page will open from the host phone and your account will be transferred automatically. You must be on the same Wi-Fi or the host’s hotspot.',
+    'Акаунт перенесено з сайту.': 'Account transferred from the website.',
+    'На цьому пристрої вже є акаунт з таким нікнеймом, але з іншим паролем.': 'This device already has an account with this nickname but a different password.',
+    'Офіційних персонажів видалити не можна.': 'Official characters cannot be deleted.',
+    'Офіційні поля видалити не можна.': 'Official fields cannot be deleted.',
+    'Офіційний персонаж': 'Official character',
+    'Офіційне поле': 'Official field',
+    'Усі офіційні коробки додано автоматично, їх не можна видалити чи змінити.': 'All official boxes are added automatically and cannot be deleted or changed.'
 };
 
 function tEn(raw) {
