@@ -493,3 +493,142 @@ function remapNames(chars, maps) {
 }
 
 if (typeof module !== 'undefined') module.exports = { P };
+
+// ───────────── Офіційні коробки: додаються автоматично й не видаляються ─────────────
+
+const Official = {
+    isChar(name) { const id = Labels.charId(name); return !!(id && Cat.charById(id)); },
+    isMap(name) { const id = Labels.mapId(name); return !!(id && Cat.mapById(id)); },
+    /** Додає все з каталогу (персонажів, поля, коробки), якщо цього ще немає. Записи користувача зберігаються. */
+    ensure() {
+        const fighters = Lists.fighters(), boxes = Lists.boxes(), links = Links.chars();
+        const maps = Lists.maps(), mlinks = Links.maps(), mboxes = Links.mapBoxes();
+        const fl = new Map(fighters.map((n) => [n.toLowerCase(), n]));
+        const ml = new Map(maps.map((m) => [m.name.toLowerCase(), m.name]));
+        let fc = false, mc = false;
+        const find = (idx, item) => { let ex = idx.get(item.name.toLowerCase()); if (!ex) for (const a of item.aliases) { const x = idx.get(a.toLowerCase()); if (x) { ex = x; break; } } return ex; };
+        for (const b of CATALOG) {
+            for (const c of b.characters) {
+                const ex = find(fl, c);
+                if (ex) {   // уже є запис (за назвою чи псевдонімом) — прив'язуємо до каталогу
+                    if (!links[ex]) { links[ex] = c.id; fc = true; }
+                    if (!boxes[ex]) { boxes[ex] = b.name; fc = true; }
+                } else {
+                    fighters.push(c.name); fl.set(c.name.toLowerCase(), c.name); boxes[c.name] = b.name; links[c.name] = c.id; fc = true;
+                }
+            }
+            for (const m of b.maps) {
+                const ex = find(ml, m);
+                if (ex) {
+                    if (!mlinks[ex]) { mlinks[ex] = m.id; mc = true; }
+                    if (!mboxes[ex]) { mboxes[ex] = b.name; mc = true; }
+                } else {
+                    maps.push({ name: m.name, team: m.team }); ml.set(m.name.toLowerCase(), m.name); mlinks[m.name] = m.id; mboxes[m.name] = b.name; mc = true;
+                }
+            }
+        }
+        if (fc) { Lists.setFighters(fighters); Lists.setBoxes(boxes); Links.saveChars(links); }
+        if (mc) { Lists.setMaps(maps); Links.saveMaps(mlinks); Links.saveMapBoxes(mboxes); }
+        return fc || mc;
+    }
+};
+
+// ───────────── Перенесення акаунта: сайт (https) → сторінка кімнати (http://IP:порт) і назад ─────────────
+// localStorage окремий для кожної адреси сайту, тому дані передаються між вікнами через postMessage.
+// Сторінка кімнати відкривається з сайту кнопкою «Відкрити сторінку кімнати» (window.open) і просить
+// дані в сайту; після кожної мережевої гри оновлений акаунт (матчі, історія) повертається назад.
+// Дані ходять лише між двома вікнами браузера і нікуди не надсилаються.
+
+const AccountSync = {
+    SITE_ORIGINS: ['https://besarabnikita5-ux.github.io'],   // звідки сторінка кімнати приймає акаунт
+    roomWin: null, roomOrigin: '', parentOrigin: '',
+
+    snapshot() {
+        const nick = P.get('currentUser'); if (!nick) return null;
+        const entry = Accounts.all()[nick]; if (!entry) return null;
+        return {
+            v: 1, nick, entry, matches: MatchStore.load(nick), history: HistoryStore.load(nick), profile: ProfileStore.load(nick),
+            avatar: Avatars.get(nick) || '', legacy: P.get('stats_' + nick.toLowerCase()) || '',
+            theme: { themeIndex: P.get('themeIndex'), themeCustom: P.get('themeCustom'), customTheme: P.get('customTheme'), language: P.get('language') }
+        };
+    },
+
+    /** Зливає знімок у локальне сховище. → 'ok' | 'bad' | 'conflict' (такий нікнейм уже є з іншим паролем). */
+    apply(s) {
+        try {
+            if (!s || s.v !== 1 || !Accounts.isValidNick(String(s.nick))) return 'bad';
+            const e = s.entry;
+            if (!e || typeof e.salt !== 'string' || typeof e.hash !== 'string') return 'bad';
+            const nick = String(s.nick), key = Accounts.canonical(nick), accounts = Accounts.all();
+            if (key) { if (accounts[key].hash !== e.hash) return 'conflict'; }
+            else { accounts[nick] = { salt: e.salt, algo: e.algo, iter: e.iter, hash: e.hash }; Accounts.saveAll(accounts); }
+            const owner = key || nick;
+            const arr = (a) => (Array.isArray(a) ? a : []);
+            const ms = arr(s.matches).filter((m) => m && m.id !== undefined).map((m) => ({
+                id: String(m.id), ts: Number(m.ts) || 0, mode: String(m.mode || ''), map: String(m.map || ''), chars: arr(m.chars).map(String),
+                nums: arr(m.nums).map((x) => parseInt(x, 10) || 0), win: !!m.win, opp: arr(m.opp).map(String), oc: arr(m.oc).map(String),
+                dur: Number.isFinite(Number(m.dur)) ? Number(m.dur) : -1
+            }));
+            MatchStore.merge(owner, ms);
+            const hs = arr(s.history).filter((r) => r && typeof r === 'object').map((o) => ({
+                timestamp: Number(o.timestamp) || 0, mode: String(o.mode || ''), fighters: arr(o.fighters).map(String), mapName: String(o.mapName || ''), details: String(o.details || '')
+            }));
+            HistoryStore.save(owner, HistoryStore.merge(HistoryStore.load(owner), hs));
+            const pr = ProfileStore.load(owner);
+            if (s.profile && !pr.fc && !pr.fm) ProfileStore.save(owner, { fc: String(s.profile.fc || ''), fm: String(s.profile.fm || '') });
+            if (typeof s.avatar === 'string' && s.avatar.startsWith('data:image/') && s.avatar.length < 400000 && !Avatars.get(owner)) Avatars.set(owner, s.avatar);
+            if (typeof s.legacy === 'string' && s.legacy && !P.has('stats_' + owner.toLowerCase())) P.set('stats_' + owner.toLowerCase(), s.legacy);
+            const th = s.theme || {};
+            if (!P.has('themeIndex') && th.themeIndex !== null && th.themeIndex !== undefined) {
+                P.set('themeIndex', th.themeIndex);
+                if (th.themeCustom !== null && th.themeCustom !== undefined) P.set('themeCustom', th.themeCustom);
+                if (typeof th.customTheme === 'string') P.set('customTheme', th.customTheme);
+            }
+            if (!P.has('language') && typeof th.language === 'string' && th.language) P.set('language', th.language);
+            if (!P.get('currentUser')) P.set('currentUser', owner);
+            return 'ok';
+        } catch (_) { return 'bad'; }
+    },
+
+    // ── сторона сайту ──
+    /** Відкриває сторінку кімнати у новому вікні й дозволяє їй забрати акаунт. false — браузер заблокував вікно. */
+    openRoom(url, origin) {
+        let w = null;
+        try { w = window.open(url, 'unmatched-room'); } catch (_) { }
+        if (!w) { location.href = url; return false; }
+        AccountSync.roomWin = w; AccountSync.roomOrigin = origin;
+        return true;
+    },
+    onParentMessage(e) {
+        const A = AccountSync;
+        if (!A.roomWin || e.source !== A.roomWin || e.origin !== A.roomOrigin) return;
+        const d = e.data; if (!d || typeof d !== 'object') return;
+        if (d.unmatched === 'hello') A.roomWin.postMessage({ unmatched: 'data', snapshot: A.snapshot() }, A.roomOrigin);
+        else if (d.unmatched === 'sync' && A.apply(d.snapshot) === 'ok') { Labels.reload(); App.refresh(); }
+    },
+
+    // ── сторона сторінки кімнати ──
+    startChild() {
+        if (!window.opener || location.protocol !== 'http:') return;
+        let done = false, tries = 0;
+        const iv = setInterval(() => {
+            if (done || ++tries > 20) { clearInterval(iv); return; }
+            try { window.opener.postMessage({ unmatched: 'hello' }, '*'); } catch (_) { }
+        }, 500);
+        window.addEventListener('message', (e) => {
+            if (e.source !== window.opener || !AccountSync.SITE_ORIGINS.includes(e.origin)) return;
+            const d = e.data; if (!d || d.unmatched !== 'data') return;
+            done = true; AccountSync.parentOrigin = e.origin;
+            if (!d.snapshot) return;
+            const r = AccountSync.apply(d.snapshot);
+            if (r === 'ok') { Labels.reload(); App.refresh(); toast('Акаунт перенесено з сайту.'); }
+            else if (r === 'conflict') toast('На цьому пристрої вже є акаунт з таким нікнеймом, але з іншим паролем.', 6000);
+        });
+    },
+    /** Повертає оновлений акаунт на сайт (якщо вікно сайту ще відкрите). */
+    pushBack() {
+        if (!window.opener || !AccountSync.parentOrigin) return;
+        const s = AccountSync.snapshot(); if (!s) return;
+        try { window.opener.postMessage({ unmatched: 'sync', snapshot: s }, AccountSync.parentOrigin); } catch (_) { }
+    }
+};
