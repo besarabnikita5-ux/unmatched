@@ -94,7 +94,10 @@ function openJoinDialog() {
     function go() {
         const a = parseRoomAddress(addrI.value);
         if (!a) { err.textContent = t('Введіть адресу кімнати, як у застосунку.'); return; }
-        if (secure) { location.href = `http://${a.host}:${a.port}/`; return; }   // сторінку кімнати віддає застосунок
+        if (secure) {   // сторінку кімнати віддає застосунок; акаунт переноситься автоматично
+            if (AccountSync.openRoom(`http://${a.host}:${a.port}/`, `http://${a.host}:${a.port}`)) d.close();
+            return;
+        }
         doJoin({ host: a.host, port: a.port, mode: '1 на 1', tournament: false, name: a.host });
     }
     addrI.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
@@ -108,7 +111,7 @@ function openJoinDialog() {
     }
     kids.push(h('h3', null, t('Вхід за адресою')),
         h('p', { class: 'muted small' }, t(secure
-            ? 'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Відкриється сторінка кімнати з телефона хоста — далі приєднання в один дотик. Потрібна та сама Wi-Fi мережа або точка доступу хоста.'
+            ? 'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Сторінка кімнати відкриється з телефона хоста, а ваш акаунт перенесеться автоматично. Потрібна та сама Wi-Fi мережа або точка доступу хоста.'
             : 'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста.')),
         h('div', { class: 'row' }, h('label', { class: 'field grow' }, h('span', null, t('Адреса кімнати')), addrI)),
         h('div', { class: 'row end' }, btn(secure ? 'Відкрити сторінку кімнати' : 'Приєднатися', go)), err);
@@ -180,13 +183,13 @@ function syncNet() {
                 const c = tourDlg.close; tourDlg.close = () => { tourDlg = null; c(); };
             } else tourDlg.render();
         } else if (tourDlg) { const d = tourDlg; tourDlg = null; d.close(); }
-        if (r.resultCounter !== lastResultCount) { lastResultCount = r.resultCounter; toast('Результат мережевої гри занесено.'); App.refresh(); }
+        if (r.resultCounter !== lastResultCount) { lastResultCount = r.resultCounter; toast('Результат мережевої гри занесено.'); App.refresh(); AccountSync.pushBack(); }
     } else {
         if (lobbyDlg) { const d = lobbyDlg; lobbyDlg = null; d.close(); }
         if (tourDlg) { const d = tourDlg; tourDlg = null; d.close(); }
         hideRoll();
         if (r.notice) { toast(r.notice, 5000); Net.clearNotice(); }
-        if (r.resultCounter !== lastResultCount) { lastResultCount = r.resultCounter; App.refresh(); }
+        if (r.resultCounter !== lastResultCount) { lastResultCount = r.resultCounter; App.refresh(); AccountSync.pushBack(); }
     }
     App.updateNetChip();
 }
