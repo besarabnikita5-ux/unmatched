@@ -14,10 +14,10 @@ function statTable(map, mode, nameFn = (x) => x, labelHead = 'Назва') {
 
 function openStatsDialog() {
     const user = App.user(), owner = user || null;
-    const draw = () => {
+    const drawStats = () => {
         const s = Stats.load(owner), matches = MatchStore.load(owner);
         const modes = Object.keys(s.totals).sort();
-        if (!modes.length) return h('p', { class: 'muted' }, t('Статистика поки порожня. Зіграйте мережеву гру, щоб з’явились дані.'));
+        if (!modes.length) return h('p', { class: 'muted' }, t('Статистика поки порожня. Зіграйте мережеву гру або додайте матч вручну.'));
         return tabs(modes.map((m) => [m, m]), modes[0], (mode) => {
             const tot = s.totals[mode];
             const month = (ts) => { const d = new Date(ts); return d.getFullYear() * 12 + d.getMonth(); };
@@ -37,11 +37,16 @@ function openStatsDialog() {
                 }))) : null,
                 sec('Матчі', h('div', { class: 'list' }, matches.filter((m) => m.mode === mode).slice(0, 100).map((m) =>
                     h('div', { class: 'row' },
-                        h('div', { class: 'grow' }, h('div', null, m.chars.map(Labels.char).join(' + '), ' • ', Labels.map(m.map)), h('div', { class: 'muted small' }, formatDate(m.ts), m.dur >= 0 ? ' • ' + formatDuration(m.dur) : '', m.opp.length ? ' • vs ' + m.opp.join(', ') : '')),
+                        h('div', { class: 'grow' }, h('div', null, m.id.startsWith('manual-') ? h('span', { class: 'muted', title: t('Внесено вручну') }, '✎ ') : null, m.chars.map(Labels.char).join(' + '), ' • ', Labels.map(m.map)), h('div', { class: 'muted small' }, formatDate(m.ts), m.dur >= 0 ? ' • ' + formatDuration(m.dur) : '', m.opp.length ? ' • vs ' + m.opp.join(', ') : '')),
                         h('button', { class: 'chip ' + (m.win ? 'win' : 'lose'), title: t('Змінити результат'), onclick: () => { MatchStore.toggleWin(owner, m.id); d.setBody(draw()); } }, m.win ? t('Перемога') : t('Поразка')),
                         h('button', { class: 'icon-btn', title: t('Видалити'), onclick: () => confirmDialog('Видалити цей матч зі статистики?', () => { MatchStore.remove(owner, m.id); d.setBody(draw()); }) }, '🗑'))))));
         });
     };
+    // Кнопка ручного внесення завжди зверху, навіть коли статистика порожня
+    const draw = () => [
+        h('div', { class: 'row end manual-add' }, btn('＋ Додати матч вручну', () => openManualMatchDialog(owner, () => d.setBody(draw())))),
+        drawStats()
+    ];
     const d = openDialog({ title: user ? `Статистика • ${user}` : 'Статистика (гість)', wide: true, body: draw() });
 }
 
@@ -299,4 +304,124 @@ function openCatalogDialog() {
     };
     search.addEventListener('input', draw); draw();
     openDialog({ title: 'Каталог офіційних коробок', wide: true, body: [h('p', { class: 'muted small' }, t('Усі офіційні коробки додано автоматично, їх не можна видалити чи змінити.')), search, out] });
+}
+
+
+// ───────────── Ручне внесення матчу ─────────────
+// Для ігор, зіграних без застосунку (звичайна гра, настільна гра): формат, свої персонажі, поле, результат
+// та додаткові дані вносяться одразу після гри. Такі матчі потрапляють у ту саму статистику, що й мережеві
+// (їхній id починається з "manual-").
+
+/** Плитки з пошуком. selected() — поточний вибір, onChange(новий вибір). */
+function manualPicker({ options, display, selected, max, onChange, icon }) {
+    const q = h('input', { class: 'input', type: 'search', placeholder: t('Пошук') });
+    const box = h('div', { class: 'tiles manual-tiles' });
+    const sum = h('div', { class: 'muted small manual-sum' });
+    const draw = () => {
+        const k = q.value.trim().toLowerCase();
+        const shown = options.filter((o) => !k || o.toLowerCase().includes(k) || display(o).toLowerCase().includes(k));
+        sum.textContent = selected().map(display).join(' + ') || t('Не обрано');
+        box.replaceChildren(...shown.map((o) => {
+            const on = selected().includes(o);
+            return h('button', {
+                type: 'button', class: 'tile' + (on ? ' on' : ''),
+                onclick: () => {
+                    const s = selected();
+                    onChange(max === 1 ? [o] : on ? s.filter((x) => x !== o) : (s.length < max ? [...s, o] : s));
+                    draw();
+                }
+            }, icon(o), h('div', { class: 'tile-name' }, display(o)), on ? h('span', { class: 'tile-ok' }, '✓') : null);
+        }));
+        if (!shown.length) box.append(h('p', { class: 'muted small' }, t('Нічого не знайдено.')));
+    };
+    q.addEventListener('input', draw); draw();
+    return h('div', { class: 'manual-picker' }, sum, q, box);
+}
+
+function openManualMatchDialog(owner, onSaved) {
+    const pad = (n) => String(n).padStart(2, '0');
+    const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const S = { mode: '1 на 1', chars: [], map: '', win: null, nums: [], opp: '', oppChars: [], date: local(new Date()), minutes: '' };
+    const err = h('div', { class: 'err' });
+    const fail = (m) => { err.textContent = t(m); };
+    const field = (label, node) => h('div', { class: 'field' }, h('span', null, t(label)), node);
+
+    const save = () => {
+        err.textContent = '';
+        if (!S.chars.length) return fail('Обери свого персонажа.');
+        if (!S.map) return fail('Обери поле.');
+        if (S.win === null) return fail('Вкажи результат: перемога чи поразка.');
+        if (S.nums.length && S.nums.length !== S.chars.length) return fail('Вкажи номер ходу для кожного персонажа або прибери вибір.');
+        const ts = new Date(S.date).getTime();
+        if (!Number.isFinite(ts)) return fail('Вкажіть дату й час.');
+        if (ts > Date.now() + 86400000) return fail('Дата не може бути в майбутньому.');
+        let dur = -1;
+        if (S.minutes !== '') {
+            const m = parseInt(S.minutes, 10);
+            if (!(m >= 0 && m <= 600)) return fail('Тривалість — число хвилин від 0 до 600.');
+            dur = m * 60000;
+        }
+        const opp = S.opp.split(/[,;\n]/).map((x) => x.trim().slice(0, 16)).filter(Boolean)
+            .filter((x, i, a) => a.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i).slice(0, 3);
+        MatchStore.add(owner, {
+            id: 'manual-' + uuid(), ts, mode: S.mode, map: Names.map(S.map), chars: S.chars.map(Names.character),
+            nums: [...S.nums].sort((a, b) => a - b), win: S.win, opp, oc: S.oppChars.map(Names.character), dur
+        });
+        toast('Матч додано до статистики.');
+        d.close();
+        if (onSaved) onSaved();
+        if (typeof AccountSync !== 'undefined') AccountSync.pushBack();
+    };
+
+    const render = () => {
+        const one = S.mode === '1 на 1', maxChars = one ? 1 : 2, maxNum = one ? 2 : 4;
+        const fighters = Lists.fighters();
+        const mapOpts = Lists.maps().filter((m) => one || m.team).map((m) => m.name);
+        if (S.map && !mapOpts.includes(S.map)) S.map = '';
+        S.chars = S.chars.slice(0, maxChars); S.nums = S.nums.filter((n) => n <= maxNum).slice(0, Math.max(S.chars.length, 1));
+
+        const modeRow = h('div', { class: 'row' }, ['1 на 1', '2 на 2'].map((m) =>
+            h('button', { type: 'button', class: 'btn ' + (S.mode === m ? '' : 'ghost'), onclick: () => { S.mode = m; render(); } }, m)));
+
+        const resRow = h('div', { class: 'row' });
+        const paintRes = () => resRow.replaceChildren(...[[true, 'Перемога'], [false, 'Поразка']].map(([v, l]) =>
+            h('button', { type: 'button', class: 'btn ' + (S.win === v ? '' : 'ghost'), onclick: () => { S.win = v; paintRes(); } }, t(l))));
+        paintRes();
+
+        const numRow = h('div', { class: 'row wrap' });
+        const paintNums = () => numRow.replaceChildren(...Array.from({ length: maxNum }, (_, i) => i + 1).map((n) => {
+            const on = S.nums.includes(n);
+            return h('button', {
+                type: 'button', class: 'btn small ' + (on ? '' : 'ghost'),
+                onclick: () => {
+                    if (on) S.nums = S.nums.filter((x) => x !== n);
+                    else if (S.nums.length < Math.max(S.chars.length, 1)) S.nums = [...S.nums, n];
+                    paintNums();
+                }
+            }, one ? (n === 1 ? t('Перший') : t('Другий')) : '№ ' + n);
+        }));
+        paintNums();
+
+        d.setBody([
+            h('p', { class: 'muted small' }, t('Внесіть гру, зіграну без застосунку, щоб статистика була повнішою.')),
+            h('h3', null, t('Формат')), modeRow,
+            h('h3', null, t(one ? 'Мій персонаж' : 'Мої персонажі (1–2)')),
+            manualPicker({ options: fighters, display: (n) => Labels.char(n), max: maxChars, selected: () => S.chars, onChange: (v) => { S.chars = v; S.nums = S.nums.slice(0, Math.max(v.length, 1)); paintNums(); }, icon: (n) => fighterIcon(n, 44) }),
+            h('h3', null, t('Поле')),
+            manualPicker({ options: mapOpts, display: (n) => Labels.map(n), max: 1, selected: () => (S.map ? [S.map] : []), onChange: (v) => { S.map = v[0] || ''; }, icon: (n) => mapIcon(n, 96) }),
+            h('h3', null, t('Результат')), resRow,
+            h('h3', null, t(one ? 'Порядок ходу (необов’язково)' : 'Номер ходу для кожного персонажа (необов’язково)')), numRow,
+            h('h3', null, t('Додатково (необов’язково)')),
+            field('Суперники (нікнейми, через кому)', h('input', { class: 'input', maxlength: 60, value: S.opp, oninput: (e) => { S.opp = e.target.value; } })),
+            h('details', { class: 'manual-opp' }, h('summary', null, t('Персонажі суперників')),
+                manualPicker({ options: fighters, display: (n) => Labels.char(n), max: 2, selected: () => S.oppChars, onChange: (v) => { S.oppChars = v; }, icon: (n) => fighterIcon(n, 44) })),
+            h('div', { class: 'row wrap' },
+                h('div', { class: 'grow' }, field('Дата й час', h('input', { class: 'input', type: 'datetime-local', value: S.date, max: local(new Date()), oninput: (e) => { S.date = e.target.value; } }))),
+                h('div', { class: 'grow' }, field('Тривалість, хвилин', h('input', { class: 'input', type: 'number', min: 0, max: 600, inputMode: 'numeric', value: S.minutes, oninput: (e) => { S.minutes = e.target.value; } })))),
+            err,
+            h('div', { class: 'row end' }, btn('Скасувати', () => d.close(), 'ghost'), btn('Зберегти матч', save))
+        ]);
+    };
+    const d = openDialog({ title: 'Додати матч', wide: true, body: [] });
+    render();
 }
