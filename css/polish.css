@@ -229,3 +229,13 @@ details.box[open] > summary { margin-bottom: 6px; }
     .backdrop, .dialog, .toast { animation: none; }
     .btn, .tile, .icon-btn, .tab { transition: none; }
 }
+
+/* ── Ручне внесення матчу ── */
+.manual-add { margin: 0 0 12px; }
+.manual-picker { display: flex; flex-direction: column; gap: 8px; }
+.manual-tiles { max-height: 230px; overflow-y: auto; padding: 2px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--secondary) transparent; }
+.manual-tiles .tile { padding: 8px 6px; }
+.manual-sum { min-height: 1.2em; }
+details.manual-opp { margin: 10px 0; }
+details.manual-opp > summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
+.dialog .row.wrap > .grow { min-width: 180px; }
