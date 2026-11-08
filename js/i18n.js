@@ -111,6 +111,10 @@ const EN_EXTRA = {
     'Введіть адресу з рядка «Адреса для сайту» в застосунку хоста. Сторінка кімнати відкриється з телефона хоста, а ваш акаунт перенесеться автоматично. Потрібна та сама Wi-Fi мережа або точка доступу хоста.':
         'Enter the address from the “Address for the website” line in the host app. The room page will open from the host phone and your account will be transferred automatically. You must be on the same Wi-Fi or the host’s hotspot.',
     'Акаунт перенесено з сайту.': 'Account transferred from the website.',
+    'Акаунт не перенесено: сторінку відкрито не з сайту. Відкрийте її кнопкою «Відкрити сторінку кімнати» на сайті.': 'Account not transferred: this page was not opened from the website. Open it with the “Open the room page” button on the website.',
+    'Сайт не відповів, акаунт не перенесено. Не закривайте вкладку сайту й спробуйте ще раз.': 'The website did not respond, so the account was not transferred. Keep the website tab open and try again.',
+    'На сайті ви не увійшли в акаунт, тому тут ви гість. Увійдіть на сайті й відкрийте кімнату ще раз.': 'You are not signed in on the website, so you are a guest here. Sign in on the website and open the room again.',
+    'Не вдалося перенести акаунт: дані пошкоджені.': 'Could not transfer the account: the data is invalid.',
     'На цьому пристрої вже є акаунт з таким нікнеймом, але з іншим паролем.': 'This device already has an account with this nickname but a different password.',
     'Офіційних персонажів видалити не можна.': 'Official characters cannot be deleted.',
     'Офіційні поля видалити не можна.': 'Official fields cannot be deleted.',
