@@ -341,7 +341,13 @@ function manualPicker({ options, display, selected, max, onChange, icon }) {
 function openManualMatchDialog(owner, onSaved) {
     const pad = (n) => String(n).padStart(2, '0');
     const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    const S = { mode: '1 на 1', chars: [], map: '', win: null, nums: [], opp: '', oppChars: [], date: local(new Date()), minutes: '' };
+    const S = { mode: '1 на 1', chars: [], map: '', win: null, nums: [], opp: '', oppChars: [], date: local(new Date()), minutes: '', imported: false };
+    const applyImport = (m) => {
+        S.mode = m.mode; S.chars = m.chars.slice(0, m.mode === '1 на 1' ? 1 : 2); S.map = Names.map(m.map || '');
+        const maxN = m.mode === '1 на 1' ? 2 : 4, ns = m.nums.filter((n) => n <= maxN);
+        S.nums = ns.length === S.chars.length ? ns : []; S.win = m.win; S.opp = m.opp.join(', '); S.oppChars = m.oppChars;
+        S.date = local(new Date(m.ts)); S.minutes = m.minutes === null ? '' : String(m.minutes); S.imported = true; err.textContent = ''; render();
+    };
     const err = h('div', { class: 'err' });
     const fail = (m) => { err.textContent = t(m); };
     const field = (label, node) => h('div', { class: 'field' }, h('span', null, t(label)), node);
@@ -375,9 +381,12 @@ function openManualMatchDialog(owner, onSaved) {
 
     const render = () => {
         const one = S.mode === '1 на 1', maxChars = one ? 1 : 2, maxNum = one ? 2 : 4;
-        const fighters = Lists.fighters();
+        S.chars = S.chars.slice(0, maxChars);
+        const known = Lists.fighters();
+        const fighters = [...known, ...[...S.chars, ...S.oppChars].filter((n, i, a) => !known.includes(n) && a.indexOf(n) === i)];
         const mapOpts = Lists.maps().filter((m) => one || m.team).map((m) => m.name);
-        if (S.map && !mapOpts.includes(S.map)) S.map = '';
+        if (S.map && !mapOpts.includes(S.map) && !S.imported) S.map = '';
+        if (S.map && !mapOpts.includes(S.map)) mapOpts.unshift(S.map);
         S.chars = S.chars.slice(0, maxChars); S.nums = S.nums.filter((n) => n <= maxNum).slice(0, Math.max(S.chars.length, 1));
 
         const modeRow = h('div', { class: 'row' }, ['1 на 1', '2 на 2'].map((m) =>
@@ -403,7 +412,9 @@ function openManualMatchDialog(owner, onSaved) {
         paintNums();
 
         d.setBody([
+            S.imported ? h('div', { class: 'notice' }, t('Дані перенесено з історії. Перевірте їх і виправте, що потрібно.')) : null,
             h('p', { class: 'muted small' }, t('Внесіть гру, зіграну без застосунку, щоб статистика була повнішою.')),
+            h('div', { class: 'row end' }, btn('📋 Взяти з історії', () => openHistoryImportDialog(owner, applyImport), 'ghost small')),
             h('h3', null, t('Формат')), modeRow,
             h('h3', null, t(one ? 'Мій персонаж' : 'Мої персонажі (1–2)')),
             manualPicker({ options: fighters, display: (n) => Labels.char(n), max: maxChars, selected: () => S.chars, onChange: (v) => { S.chars = v; S.nums = S.nums.slice(0, Math.max(v.length, 1)); paintNums(); }, icon: (n) => fighterIcon(n, 44) }),
@@ -424,4 +435,76 @@ function openManualMatchDialog(owner, onSaved) {
     };
     const d = openDialog({ title: 'Додати матч', wide: true, body: [] });
     render();
+}
+
+
+// ───────────── Перенесення даних з історії битв у ручний матч ─────────────
+// Запис історії: режим, поле, час і рядки «Нік: Персонаж + Персонаж (№1,2)» + «Перемога: …», «Тривалість: …».
+// Користувач обирає битву, вказує, хто в ній був він, союзник і суперник, а потім правит усе у формі матчу.
+
+function parseHistoryLine(line) {
+    const m = /^([^:]+):\s*(.+?)(?:\s*\(№([\d,\s]*)\))?\s*$/.exec(String(line));
+    if (!m) return { nick: '', chars: [String(line).trim()].filter(Boolean), nums: [] };
+    return {
+        nick: m[1].trim(), chars: m[2].split(' + ').map((x) => x.trim()).filter(Boolean),
+        nums: (m[3] || '').split(',').map((x) => parseInt(x, 10)).filter((n) => n > 0)
+    };
+}
+
+function parseHistoryRecord(r) {
+    const win = /Перемога:\s*([^\n]*)/.exec(r.details || '');
+    const dur = /Тривалість:\s*(\d+):(\d+)(?::(\d+))?/.exec(r.details || '');
+    let ms = -1;
+    if (dur) ms = (dur[3] !== undefined ? (+dur[1] * 3600 + +dur[2] * 60 + +dur[3]) : (+dur[1] * 60 + +dur[2])) * 1000;
+    return {
+        mode: /2 на 2/.test(r.mode) ? '2 на 2' : '1 на 1', map: r.mapName, ts: r.timestamp,
+        lines: (r.fighters || []).map(parseHistoryLine),
+        winners: win ? win[1].split(',').map((x) => x.trim().toLowerCase()).filter(Boolean) : null, durMs: ms
+    };
+}
+
+/** Вікно вибору битви з історії → onPick({mode, map, ts, chars, nums, win, opp, oppChars, minutes}). */
+function openHistoryImportDialog(owner, onPick) {
+    const list = HistoryStore.load(owner).slice(0, 50);
+    const myNick = (owner || '').toLowerCase();
+    const ROLES = [['me', 'Я'], ['mate', 'Союзник'], ['opp', 'Суперник']];
+
+    const pickStep = () => {
+        if (!list.length) return [h('p', { class: 'muted' }, t('Історія битв порожня.'))];
+        return [h('p', { class: 'muted small' }, t('Оберіть битву, дані якої треба перенести. Потім усе можна виправити.')),
+            h('div', { class: 'list' }, list.map((r) => h('button', { type: 'button', class: 'row pick', onclick: () => d.setBody(roleStep(r)) },
+                h('div', { class: 'grow' }, h('b', null, t(r.mode)), ' • ', Labels.map(r.mapName), h('div', { class: 'muted small' }, formatDate(r.timestamp)),
+                    (r.fighters || []).map((l) => h('div', { class: 'small' }, l))), chip('Обрати'))))];
+    };
+
+    const roleStep = (rec) => {
+        const p = parseHistoryRecord(rec), n = p.lines.length;
+        let meIdx = p.lines.findIndex((l) => myNick && l.nick.toLowerCase() === myNick);
+        const roles = p.lines.map((_, i) => (i === meIdx ? 'me' : (p.mode === '2 на 2' && meIdx >= 0 && i === (meIdx ^ 1) ? 'mate' : 'opp')));
+        const box = h('div', { class: 'list' }), go = h('button', { type: 'button', class: 'btn' }, t('Перенести в матч')), hint = h('div', { class: 'muted small' });
+        const paint = () => {
+            const ok = roles.filter((r) => r === 'me').length === 1;
+            go.disabled = !ok; hint.textContent = ok ? '' : t('Позначте, який рядок — ваш.');
+            box.replaceChildren(...p.lines.map((l, i) => h('div', { class: 'row wrap' },
+                h('div', { class: 'grow' }, h('b', null, l.nick || '—'), h('div', { class: 'muted small' }, l.chars.map((c) => Labels.char(c)).join(' + '), l.nums.length ? ' • № ' + l.nums.join(',') : '')),
+                h('div', { class: 'row' }, ROLES.map(([k, label]) => h('button', {
+                    type: 'button', class: 'btn small ' + (roles[i] === k ? '' : 'ghost'),
+                    onclick: () => { if (k === 'me') roles.forEach((r, j) => { if (r === 'me') roles[j] = 'opp'; }); roles[i] = k; paint(); }
+                }, t(label)))))));
+        };
+        go.addEventListener('click', () => {
+            const mi = roles.indexOf('me'); if (mi < 0) return;
+            const me = p.lines[mi], opps = p.lines.filter((_, i) => roles[i] === 'opp');
+            const oppNicks = opps.map((l) => l.nick).filter((x) => x && x.toLowerCase() !== myNick && !/^Гравець \d+$/.test(x));
+            const oppChars = [...new Set(opps.flatMap((l) => l.chars))].slice(0, 2);
+            const win = p.winners ? p.winners.includes(me.nick.toLowerCase()) : null;
+            d.close();
+            onPick({ mode: p.mode, map: p.map, ts: p.ts, chars: me.chars, nums: me.nums, win, opp: oppNicks, oppChars, minutes: p.durMs >= 0 ? Math.round(p.durMs / 60000) : null });
+        });
+        paint();
+        return [h('p', { class: 'muted small' }, `${t(rec.mode)} • ${Labels.map(rec.mapName)} • ${formatDate(rec.timestamp)}`),
+            h('h3', null, t('Хто є хто в цій битві?')), box, hint,
+            h('div', { class: 'row end' }, btn('Назад', () => d.setBody(pickStep()), 'ghost'), go)];
+    };
+    const d = openDialog({ title: 'Взяти з історії', wide: true, body: pickStep() });
 }
