@@ -595,34 +595,40 @@ const AccountSync = {
     openRoom(url, origin) {
         let w = null;
         try { w = window.open(url, 'unmatched-room'); } catch (_) { }
-        if (!w) { location.href = url; return false; }
+        if (!w) { location.href = url; return false; }   // браузер заблокував нове вікно: переходимо в цій вкладці (акаунт не переноситься)
         AccountSync.roomWin = w; AccountSync.roomOrigin = origin;
         return true;
     },
     onParentMessage(e) {
         const A = AccountSync;
-        if (!A.roomWin || e.source !== A.roomWin || e.origin !== A.roomOrigin) return;
+        if (!A.roomOrigin || e.origin !== A.roomOrigin) return;   // лише від сторінки кімнати, яку ми самі відкрили
         const d = e.data; if (!d || typeof d !== 'object') return;
-        if (d.unmatched === 'hello') A.roomWin.postMessage({ unmatched: 'data', snapshot: A.snapshot() }, A.roomOrigin);
+        if (d.unmatched === 'hello' && e.source) e.source.postMessage({ unmatched: 'data', snapshot: A.snapshot() }, A.roomOrigin);
         else if (d.unmatched === 'sync' && A.apply(d.snapshot) === 'ok') { Labels.reload(); App.refresh(); }
     },
 
     // ── сторона сторінки кімнати ──
     startChild() {
-        if (!window.opener || location.protocol !== 'http:') return;
+        if (location.protocol !== 'http:' || !location.port) return;   // це не сторінка кімнати
+        if (!window.opener) {
+            if (!P.get('currentUser')) setTimeout(() => toast('Акаунт не перенесено: сторінку відкрито не з сайту. Відкрийте її кнопкою «Відкрити сторінку кімнати» на сайті.', 9000), 600);
+            return;
+        }
         let done = false, tries = 0;
         const iv = setInterval(() => {
-            if (done || ++tries > 20) { clearInterval(iv); return; }
+            if (done) { clearInterval(iv); return; }
+            if (++tries > 20) { clearInterval(iv); toast('Сайт не відповів, акаунт не перенесено. Не закривайте вкладку сайту й спробуйте ще раз.', 9000); return; }
             try { window.opener.postMessage({ unmatched: 'hello' }, '*'); } catch (_) { }
         }, 500);
         window.addEventListener('message', (e) => {
             if (e.source !== window.opener || !AccountSync.SITE_ORIGINS.includes(e.origin)) return;
             const d = e.data; if (!d || d.unmatched !== 'data') return;
             done = true; AccountSync.parentOrigin = e.origin;
-            if (!d.snapshot) return;
+            if (!d.snapshot) { toast('На сайті ви не увійшли в акаунт, тому тут ви гість. Увійдіть на сайті й відкрийте кімнату ще раз.', 9000); return; }
             const r = AccountSync.apply(d.snapshot);
             if (r === 'ok') { Labels.reload(); App.refresh(); toast('Акаунт перенесено з сайту.'); }
             else if (r === 'conflict') toast('На цьому пристрої вже є акаунт з таким нікнеймом, але з іншим паролем.', 6000);
+            else toast('Не вдалося перенести акаунт: дані пошкоджені.', 6000);
         });
     },
     /** Повертає оновлений акаунт на сайт (якщо вікно сайту ще відкрите). */
